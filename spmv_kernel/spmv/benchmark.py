@@ -1,3 +1,7 @@
+#note to execute 
+#ln -s ../coo_csr/coo_csr/coo_csr/metal-cpp ./metal-cpp
+#or wherever u have that file
+
 import torch
 import numpy as np
 import scipy.sparse

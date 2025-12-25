@@ -6,3 +6,7 @@ spmv_kernel/coo_csr/coo_csr/coo_csr/build/
 spmv_kernel/coo_csr/coo_csr/coo_csr/coo_csr.egg-info/
 spmv_kernel/coo_csr/coo_csr/coo_csr/metal-cpp/
 spmv_kernel/coo_csr/coo_csr/coo_csr/shaders.metallib
+spmv_kernel/spmv/spmv.egg-info/
+spmv_kernel/spmv/spmv_metal.egg-info/
+*.metallib
+spmv_kernel/spmv/build/

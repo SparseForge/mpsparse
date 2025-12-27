@@ -169,8 +169,8 @@ public:
             enc->dispatchThreads(MTL::Size::Make(aligned_grid_w, 1, 1), MTL::Size::Make(threads_per_group, 1, 1));
             enc->endEncoding();
 
-            cmd->commit();
-            cmd->waitUntilCompleted();
+            //cmd->commit();
+            //cmd->waitUntilCompleted();
             
             std::swap(src_keys, dst_keys);
             std::swap(src_vals, dst_vals);
@@ -185,15 +185,17 @@ public:
         MTL::Buffer* gpu_row_ptr = device->newBuffer((num_rows + 1) * sizeof(uint32_t), MTL::ResourceStorageModePrivate);
         MTL::Buffer* gpu_col_ind = device->newBuffer(num_items * sizeof(uint32_t), MTL::ResourceStorageModePrivate);
         
-        MTL::CommandBuffer* cmd_final = queue->commandBuffer();
+        //MTL::CommandBuffer* cmd_final = queue->commandBuffer();
         
-        MTL::BlitCommandEncoder* blit_fill = cmd_final->blitCommandEncoder();
+        //MTL::BlitCommandEncoder* blit_fill = cmd_final->blitCommandEncoder();
+        MTL::BlitCommandEncoder* blit_fill = cmd->blitCommandEncoder();
         uint32_t fill_val = 0xFFFFFFFF;
 
         blit_fill->fillBuffer(gpu_row_ptr, NS::Range::Make(0, (num_rows + 1) * sizeof(uint32_t)), 0xFF);
         blit_fill->endEncoding();
 
-        MTL::ComputeCommandEncoder* enc = cmd_final->computeCommandEncoder();
+        //MTL::ComputeCommandEncoder* enc = cmd_final->computeCommandEncoder();
+        MTL::ComputeCommandEncoder* enc = cmd->computeCommandEncoder();
         enc->setComputePipelineState(pso_compress);
         enc->setBuffer(src_keys, 0, 0);     
         enc->setBuffer(gpu_row_ptr, 0, 1);    
@@ -208,14 +210,17 @@ public:
         MTL::Buffer* stage_col_ind = device->newBuffer(num_items * sizeof(uint32_t), MTL::ResourceStorageModeShared);
         MTL::Buffer* stage_vals_out = device->newBuffer(num_items * sizeof(float), MTL::ResourceStorageModeShared);
 
-        MTL::BlitCommandEncoder* blit_down = cmd_final->blitCommandEncoder();
+        //MTL::BlitCommandEncoder* blit_down = cmd_final->blitCommandEncoder();
+        MTL::BlitCommandEncoder* blit_down = cmd->blitCommandEncoder();
         blit_down->copyFromBuffer(gpu_row_ptr, 0, stage_row_ptr, 0, (num_rows + 1) * sizeof(uint32_t));
         blit_down->copyFromBuffer(gpu_col_ind, 0, stage_col_ind, 0, num_items * sizeof(uint32_t));
         blit_down->copyFromBuffer(src_vals, 0, stage_vals_out, 0, num_items * sizeof(float));
         blit_down->endEncoding();
 
-        cmd_final->commit();
-        cmd_final->waitUntilCompleted();
+        // cmd_final->commit();
+        // cmd_final->waitUntilCompleted();
+        cmd->commit();
+        cmd->waitUntilCompleted();
         
         memcpy(out_row_ptr, stage_row_ptr->contents(), (num_rows + 1) * sizeof(uint32_t));
         memcpy(out_col_ind, stage_col_ind->contents(), num_items * sizeof(uint32_t));

@@ -163,4 +163,4 @@ if __name__ == "__main__":
     run_benchmark(num_rows=10000, num_cols=10000, mode='banded')
     
     # Large test for performance
-    run_benchmark(num_rows=50000, num_cols=50000, mode='banded')
+    run_benchmark(num_rows=1100000, num_cols=1100000, mode='banded')

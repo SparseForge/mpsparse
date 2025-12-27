@@ -223,6 +223,7 @@ public:
         
 
         out_row_ptr[num_rows] = num_items;
+        
 
         for (int i = num_rows - 1; i >= 0; --i) {
             if (out_row_ptr[i] == 0xFFFFFFFF) {

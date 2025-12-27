@@ -140,7 +140,10 @@ class csr_tensor {
                 enc->setBytes(&num_items, sizeof(uint32_t), 6);
                 enc->setBytes(&shift, sizeof(int), 7);
                 enc->dispatchThreads(MTL::Size::Make(aligned_grid_w, 1, 1), MTL::Size::Make(threads_per_group, 1, 1));
-                                
+                //enc->endEncoding();
+
+                
+                
                 std::swap(src_keys, dst_keys);
                 std::swap(src_vals, dst_vals);
                 output_buff = !output_buff;

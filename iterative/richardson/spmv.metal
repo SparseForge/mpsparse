@@ -46,3 +46,18 @@ kernel void spmv_op(
     }
 
 }
+
+kernel void weighted_add(
+    device const float* a [[buffer(0)]],
+    device const float* b [[buffer(1)]],
+    constant float& weight_a [[buffer(2)]],
+    constant float& weight_b [[buffer(3)]],
+    constant uint& num_elements [[buffer(4)]],
+    device float* c [[buffer(5)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= num_elements) {
+        return;
+    }
+    c[gid] = weight_a * a[gid] + weight_b * b[gid];
+}

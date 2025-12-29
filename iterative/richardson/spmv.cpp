@@ -28,6 +28,7 @@ class csr_tensor {
         MTL::CommandQueue* queue;
 
         MTL::ComputePipelineState* pso_spmv;
+        MTL::ComputePipelineState* pso_wadd;
         MTL::ComputePipelineState* pso_freq;
         MTL::ComputePipelineState* pso_vscan;
         MTL::ComputePipelineState* pso_gscan;
@@ -167,8 +168,6 @@ class csr_tensor {
             MTL::CommandBuffer* cmd_final = queue->commandBuffer();
             
             MTL::BlitCommandEncoder* blit_fill = cmd_final->blitCommandEncoder();
-            uint32_t fill_val = 0xFFFFFFFF;
-
             blit_fill->fillBuffer(gpu_row_ptr, NS::Range::Make(0, (num_rows + 1) * sizeof(uint32_t)), 0xFF);
             blit_fill->endEncoding();
 
@@ -271,6 +270,7 @@ class csr_tensor {
             };
 
             this->pso_spmv = loadKernel("spmv_op");
+            this->pso_wadd = loadKernel("weighted_add");
             library->release();
 
             libraryPath = NS::String::string("./coo_csr.metallib", NS::UTF8StringEncoding);
@@ -373,6 +373,127 @@ class csr_tensor {
             );
         }
 
+        void iterative_op(
+            float* b,
+            float* x
+        ) {
+            MTL::Buffer* x_test = this->device->newBuffer(this->num_cols * sizeof(float), MTL::ResourceStorageModePrivate);
+            MTL::Buffer* b_goal = this->device->newBuffer(this->num_rows * sizeof(float), MTL::ResourceStorageModePrivate);
+            MTL::Buffer* stage_b = this->device->newBuffer(b, num_rows*sizeof(float), MTL::ResourceStorageModeShared);
+
+
+            MTL::CommandBuffer* cmd_blit = queue->commandBuffer();
+            MTL::BlitCommandEncoder* blit_init = cmd_blit->blitCommandEncoder();
+
+            blit_init->copyFromBuffer(stage_b, 0, b_goal, 0, this->num_rows * sizeof(float));
+            blit_init->fillBuffer(x_test, NS::Range::Make(0, this->num_cols * sizeof(float)), 0);
+            blit_init->endEncoding();
+            cmd_blit->commit();
+            cmd_blit->waitUntilCompleted();
+            
+            stage_b->release();
+
+            MTL::Buffer* scratch1 = this->device->newBuffer(this->num_rows * sizeof(float), MTL::ResourceStorageModePrivate);
+            MTL::Buffer* scratch2 = this->device->newBuffer(this->num_rows * sizeof(float), MTL::ResourceStorageModePrivate);
+
+            MTL::CommandBuffer* cmd = queue->commandBuffer();
+            MTL::ComputeCommandEncoder* enc = cmd->computeCommandEncoder();
+
+            for (int i = 0; i < 10000; i++) {
+                iterative_step(x_test, b_goal, scratch1, scratch2, cmd,enc, 0.001);
+            }
+
+            enc->endEncoding();
+            cmd->commit();
+            cmd->waitUntilCompleted();
+
+            scratch1->release();
+            scratch2->release();
+
+            MTL::Buffer* stage_x = this->device->newBuffer(this->num_cols * sizeof(float), MTL::ResourceStorageModeShared);
+
+            MTL::CommandBuffer* cmd_last = queue->commandBuffer();
+            MTL::BlitCommandEncoder* blit_last = cmd_last->blitCommandEncoder();
+
+            blit_last->copyFromBuffer(x_test, 0, stage_x, 0, this->num_cols * sizeof(float));
+            blit_last->endEncoding();
+            cmd_last->commit();
+            cmd_last->waitUntilCompleted();
+
+            memcpy(x, stage_x->contents(), (this->num_cols) * sizeof(float));
+
+        }
+
+        void iter_solve(
+            torch::Tensor b,
+            torch::Tensor x
+        ) {
+            float* x_vals = (float*) x.data_ptr<float>();
+            float* b_vals = (float*) b.data_ptr<float>();
+
+            iterative_op(
+                b_vals,
+                x_vals
+            );
+        }
+
+
+        void iterative_step(
+            MTL::Buffer* x,
+            MTL::Buffer* b,
+            MTL::Buffer* scratch1,
+            MTL::Buffer* scratch2,
+            MTL::CommandBuffer* cmd,
+             MTL::ComputeCommandEncoder* enc,
+            float weight
+
+        ) {
+            //(b - Ax)
+
+            float sec_weight = -1 * weight;
+            float ONE = 1;
+            //float MONE = -1;
+
+            // MTL::CommandBuffer* cmd = queue->commandBuffer();
+            // MTL::ComputeCommandEncoder* enc = cmd->computeCommandEncoder();
+
+            enc->setComputePipelineState(this->pso_spmv);
+            enc->setBuffer(this->row_ptr, 0, 0);
+            enc->setBuffer(this->col_ind, 0, 1);
+            enc->setBuffer(this->vals, 0, 2);
+            enc->setBuffer(x, 0, 3);
+            enc->setBuffer(scratch1, 0, 4);
+            enc->setBytes(&this->num_rows, sizeof(uint32_t), 5);
+            enc->setBytes(&this->num_cols, sizeof(uint32_t), 6);
+
+            uint32_t total_threads_needed = SIMD_WIDTH * this->num_rows;
+
+            enc->dispatchThreads(MTL::Size::Make(total_threads_needed, 1, 1), MTL::Size::Make(THREADS_PER_GROUP, 1, 1));
+
+            enc->setComputePipelineState(this->pso_wadd);
+            enc->setBuffer(b, 0, 0);
+            enc->setBuffer(scratch1, 0, 1);
+            enc->setBytes(&weight, sizeof(float), 2);
+            enc->setBytes(&sec_weight, sizeof(float), 3);
+            enc->setBytes(&this->num_rows, sizeof(uint32_t), 4);
+            enc->setBuffer(scratch2, 0, 5);
+            enc->dispatchThreads(MTL::Size::Make(this->num_rows, 1, 1),  MTL::Size::Make(THREADS_PER_GROUP, 1, 1));
+
+            //add to x
+            enc->setComputePipelineState(this->pso_wadd);
+            enc->setBuffer(x, 0, 0);
+            enc->setBuffer(scratch2, 0, 1);
+            enc->setBytes(&ONE, sizeof(float), 2);
+            enc->setBytes(&ONE, sizeof(float), 3);
+            enc->setBytes(&this->num_rows, sizeof(uint32_t), 4);
+            enc->setBuffer(x, 0, 5);
+            enc->dispatchThreads(MTL::Size::Make(this->num_rows, 1, 1),  MTL::Size::Make(THREADS_PER_GROUP, 1, 1));
+            
+            // enc->endEncoding();
+            // cmd->commit();
+            // cmd->waitUntilCompleted();
+        }
+
 };
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -386,5 +507,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
              py::arg("out_vals"),
              py::arg("num_rows"),
              py::arg("num_cols"))
-        .def("mv", &csr_tensor::mv, "spmvmul");
+        .def("mv", &csr_tensor::mv, "spmvmul")
+        .def("iter_solve", &csr_tensor::iter_solve, "iter_solve");
 }

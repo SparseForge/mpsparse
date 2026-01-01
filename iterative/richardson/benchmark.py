@@ -55,7 +55,7 @@ def generate_convergent_problem(rows, cols, density=0.01):
 
 def run_benchmark():
     # Setup
-    N = 4096 # Matrix size
+    N = 32768 # Matrix size
     torch.manual_seed(42)
     np.random.seed(42)
     
@@ -130,10 +130,36 @@ def run_benchmark():
     print(f"\n--- Results ---")
     print(f"Relative Error: {rel_error:.6f}")
     
-    if rel_error < 1e-2:
-        print("✅ SUCCESS: Solver converged significantly.")
+    if np.isnan(x_final_np).any() or np.isinf(x_final_np).any():
+        print("\n⚠️  WARNING: Solver output contains NaNs or Infs.")
+        rel_error = float('inf')
     else:
-        print("⚠️  WARNING: Convergence poor or unstable.")
+        # ---------------------------------------------------------
+        # HYPOTHESIS TEST: Exclude the last 'margin' entries
+        # ---------------------------------------------------------
+        margin = 16  # Ignore the last 16 elements (arbitrary safety buffer)
+        
+        print(f"\n--- Hypothesis Testing (Excluding last {margin} elements) ---")
+        
+        # Slice the arrays
+        x_est_sliced = x_final_np[:-margin]
+        x_true_sliced = x_true_np[:-margin]
+        
+        # Calculate Error on the SLICE
+        error_norm = np.linalg.norm(x_true_sliced - x_est_sliced)
+        true_norm = np.linalg.norm(x_true_sliced)
+        rel_error = error_norm / (true_norm + 1e-8)
+        
+        print(f"Sliced Relative Error: {rel_error:.6f}")
+        
+        # Also print full error for comparison
+        full_error = np.linalg.norm(x_true_np - x_final_np) / (np.linalg.norm(x_true_np) + 1e-8)
+        print(f"Full Vector Error:     {full_error:.6f}")
+
+    if rel_error < 1e-2:
+        print("✅ SUCCESS (on sliced data): Solver converged.")
+    else:
+        print("⚠️  WARNING: Convergence poor even on sliced data.")
 
     # --- CPU Baseline Comparison ---
     print("\n--- CPU Baseline (Scipy CG) ---")

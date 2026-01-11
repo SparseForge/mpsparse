@@ -6,6 +6,17 @@ using namespace metal;
 constant int SIMD_WIDTH = 32;
 constant int THREADGROUP_SIZE = 256;
 
+kernel void divides(
+    device const float* a [[buffer(0)]],
+    device const float* b [[buffer(1)]],
+    device float* c [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid == 0) {
+        c[0] = a[0] / b[0];
+    }
+}
+
 kernel void spmv_op(
     device const int* A_rows [[buffer(0)]],
     device const int* A_cols [[buffer(1)]],
@@ -85,3 +96,41 @@ kernel void zero_out(
 ) {
     in[0] = 0.0;
 }
+
+
+kernel void weighted_add_buffer(
+    device const float* a [[buffer(0)]],
+    device const float* b [[buffer(1)]],
+    device const float* weight_a [[buffer(2)]],
+    device const float* weight_b [[buffer(3)]],
+    constant uint& num_elements [[buffer(4)]],
+    device float* c [[buffer(5)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= num_elements) {
+        return;
+    }
+    c[gid] = weight_a[0] * a[gid] + weight_b[0] * b[gid];
+}
+
+kernel void iter_update_buffer(
+    device const float* a [[buffer(0)]],
+    device const float* b [[buffer(1)]],
+    device float* c [[buffer(2)]],
+    device const float* weight_b [[buffer(3)]],
+    constant uint& num_elements [[buffer(4)]],
+    constant uint& mode [[buffer(5)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= num_elements) {
+        return;
+    }
+    if (mode == 0) {
+        c[gid] = a[gid] + weight_b[0] * b[gid];
+    } else {
+        c[gid] = a[gid] - weight_b[0] * b[gid];
+    }
+}
+
+
+

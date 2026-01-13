@@ -199,12 +199,12 @@ def run_benchmark(mode, size, density):
     print(f"\n>>> Speedup: {py_time / avg_custom:.2f}x")
 
 if __name__ == "__main__":
-    #os.system("pip install . --no-build-isolation") 
+    os.system("pip install . --no-build-isolation") 
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, choices=["ml", "physics"], default="ml")
-    parser.add_argument("--size", type=int, default=4096) # Matrix row count
-    parser.add_argument("--density", type=float, default=0.05)
+    parser.add_argument("--size", type=int, default=18976) # Matrix row count
+    parser.add_argument("--density", type=float, default=0.015)
     args = parser.parse_args()
     
     run_benchmark(args.mode, args.size, args.density)

@@ -199,9 +199,17 @@ kernel void fused_spvmv(
     uint gid [[ thread_position_in_grid ]],
     uint tid [[ thread_index_in_simdgroup ]],
     uint sid [[ simdgroup_index_in_threadgroup ]],
+    uint lid [[ thread_position_in_threadgroup ]],
     uint bid [[ threadgroup_position_in_grid ]]
 ) {
     uint row = (bid*(THREADGROUP_SIZE/SIMD_WIDTH) + sid);
+    threadgroup float temp[THREADGROUP_SIZE/SIMD_WIDTH];
+
+    if (lid < (THREADGROUP_SIZE / SIMD_WIDTH)) {
+        temp[lid] = 0.0f;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     if (row >= num_rows) {
         return;
@@ -225,7 +233,26 @@ kernel void fused_spvmv(
 
     if (tid == 0) {
         b[row] = complete_sum;
-        atomic_fetch_add_explicit(ret, complete_sum * y[row], memory_order_relaxed);
+        temp[sid] = complete_sum * y[row];
     }
+
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+
+    if (lid == 0) {
+        float thread_group_sum = 0.0;
+
+        for (int i = 0; i < THREADGROUP_SIZE/SIMD_WIDTH; i++) {
+            thread_group_sum += temp[i];
+        }
+
+        if (thread_group_sum != 0.0 && !isnan(thread_group_sum)) {
+            atomic_fetch_add_explicit(ret, thread_group_sum, memory_order_relaxed);
+        }
+
+    }
+
+
 
 }

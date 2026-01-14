@@ -2,7 +2,7 @@
 
 An implementation of sparse matrix operations using Apple's Metal Performance Shaders. The goal is to build a library which can support QR and LU factorization of sparse matrices 
 
-##Currently Implemented:
+## Currently Implemented:
 * COO to CSR converters
 * CGD
 

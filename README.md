@@ -2,12 +2,17 @@
 
 An implementation of sparse matrix operations using Apple's Metal Performance Shaders. The goal is to build a library which can support QR and LU factorization of sparse matrices 
 
+##Currently Implemented:
+* COO to CSR converters
+* CGD
+
 TODO:
 * Test COO to CSR converter, drag race against CUDA impl
 * Test SpMV kernel, again vs. CUDA impl
 * Implement sparse QR in CUDA (reference)
 * Discuss iterative solvers more
 * Plug in COO to CSR to torch
+* BiCGSTAB
 
 # CGD
 
@@ -91,6 +96,8 @@ Performance Results
 
 ![ML Matrices](graphs/benchmark_ml_results.png)
 ![Physics Matrices](graphs/benchmark_physics_results.png)
+
+#BiCGSTAB
 
 # Future Steps 
 

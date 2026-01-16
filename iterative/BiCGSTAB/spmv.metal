@@ -14,8 +14,8 @@ kernel void spmv_op(
     device const float* A_vals [[buffer(2)]],
     device const float* x [[buffer(3)]],
     device float* b [[buffer(4)]],
-    constant uint& num_rows,
-    constant uint& num_cols,
+    constant uint& num_rows [[buffer(5)]],
+    constant uint& num_cols [[buffer(6)]],
     uint gid [[ thread_position_in_grid ]],
     uint tid [[ thread_index_in_simdgroup ]],
     uint sid [[ simdgroup_index_in_threadgroup ]],
@@ -23,27 +23,26 @@ kernel void spmv_op(
 ) {
     uint row = (bid*(THREADGROUP_SIZE/SIMD_WIDTH) + sid);
 
-    if (row >= num_rows) {
-        return;
-    }
-
-    int row_start = A_rows[row];
-    int row_end = A_rows[row + 1];
-
     float p_sum = 0.0;
 
-    for (int i = row_start + tid; i < row_end; i+= SIMD_WIDTH) {
-        int col_index = A_cols[i];
-        float val = A_vals[i];
-        float other_val = x[col_index];
+    if (row < num_rows) {
 
-        p_sum += val*other_val;
-    
+        int row_start = A_rows[row];
+        int row_end = A_rows[row + 1];
+
+        for (int i = row_start + tid; i < row_end; i+= SIMD_WIDTH) {
+            int col_index = A_cols[i];
+            float val = A_vals[i];
+            float other_val = x[col_index];
+
+            p_sum += val*other_val;
+        
+        }
     }
 
     float complete_sum = simd_sum(p_sum);
 
-    if (tid == 0) {
+    if (tid == 0 && row < num_rows) {
         b[row] = complete_sum;
     }
 
@@ -76,8 +75,8 @@ kernel void fused_spvmv(
     device const float* y [[buffer(4)]],
     device float* b [[buffer(5)]],
     device atomic_float* ret [[buffer(6)]],
-    constant uint& num_rows,
-    constant uint& num_cols,
+    constant uint& num_rows [[buffer(7)]],
+    constant uint& num_cols [[buffer(8)]],
     uint gid [[ thread_position_in_grid ]],
     uint tid [[ thread_index_in_simdgroup ]],
     uint sid [[ simdgroup_index_in_threadgroup ]],
@@ -93,36 +92,33 @@ kernel void fused_spvmv(
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    if (row >= num_rows) {
-        return;
-    }
-
-    int row_start = A_rows[row];
-    int row_end = A_rows[row + 1];
-
     float p_sum = 0.0;
 
-    for (int i = row_start + tid; i < row_end; i+= SIMD_WIDTH) {
-        int col_index = A_cols[i];
-        float val = A_vals[i];
-        float other_val = x[col_index];
+    if (row < num_rows) {
+        int row_start = A_rows[row];
+        int row_end = A_rows[row + 1];
 
-        p_sum += val*other_val;
-    
+        for (int i = row_start + tid; i < row_end; i+= SIMD_WIDTH) {
+            int col_index = A_cols[i];
+            float val = A_vals[i];
+            float other_val = x[col_index];
+
+            p_sum += val*other_val;
+        
+        }
+
     }
 
     float complete_sum = simd_sum(p_sum);
 
-    if (tid == 0) {
+    if (tid == 0 & row < num_rows) {
         b[row] = complete_sum;
         temp[sid] = complete_sum * y[row];
     }
 
-
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-
-    if (lid == 0) {
+    if (lid == 0 && row < num_rows) {
         float thread_group_sum = 0.0;
 
         for (int i = 0; i < THREADGROUP_SIZE/SIMD_WIDTH; i++) {

@@ -7,56 +7,73 @@ using namespace metal;
 
 constant int SIMD_WIDTH = 32;
 constant int THREADGROUP_SIZE = 256;
+constant float STAB_TOLERANCE = 1e-15f; 
 
 kernel void upp(
     device float* p [[buffer(0)]],
     device const float* r [[buffer(1)]],
     device const float* v [[buffer(2)]],
     device float* scalars [[buffer(3)]],
-    constant uint& size,
-    constant uint& mode,
-     uint gid [[thread_position_in_grid]],
-    uint tid [[thread_index_in_simdgroup]],
-    uint sid [[simdgroup_index_in_threadgroup]],
+    constant uint& size [[buffer(4)]],
+    constant uint& mode [[buffer(5)]],
+    uint gid [[thread_position_in_grid]],
     uint lid [[thread_position_in_threadgroup]]
 ) {
     //In the future, we should probably figure out a way to fuse the spmv (v = Ap) step with this step to reduce overhead
     //However, not implemented right now :sob:
 
-    threadgroup float rho_prev;
-    threadgroup float rho_curr;
+    threadgroup float rho_new;
+    threadgroup float rho_old;
     threadgroup float alpha;
     threadgroup float omega;
 
     if (lid == 0) {
-        rho_prev = scalars[mode];
-        rho_curr = scalars[(mode+1)%2];
-        alpha = scalars[2];
-        omega = scalars[3];
+        if (mode > 0) {
+            rho_new = scalars[(mode - 1) % 2];
+            rho_old = scalars[mode % 2];
+            alpha = scalars[2];
+            omega = scalars[3];
+        }
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     if (gid < size) {
-        p[gid] = r[gid] + (rho_curr/rho_prev) * (alpha/omega) * (p[gid] - omega*v[gid]);
-    }
+        if (mode == 0) {
+            p[gid] = r[gid];
+        } 
+        else {
+            float beta = 0.0f;
+            
+            bool stable_denominator = (abs(rho_old) > STAB_TOLERANCE) && (abs(omega) > STAB_TOLERANCE);
 
-    //also must zero out sigma, phi_1, phi_2, r_norm
+            if (stable_denominator) {
+                beta = (rho_new / rho_old) * (alpha / omega);
+                
+                if (isinf(beta) || isnan(beta)) {
+                    beta = 0.0f;
+                }
+            }
+            
+            p[gid] = r[gid] + beta * (p[gid] - omega * v[gid]);
+        }
+    }
 
     if (gid == 0) {
-        scalars[4] = 0.0f; //sigma
-        scalars[5] = 0.0f; //phi1
-        scalars[6] = 0.0f; //phi2
-        scalars[7] = 0.0f; //r_norm
+        scalars[4] = 0.0f; 
+        scalars[5] = 0.0f; 
+        scalars[6] = 0.0f; 
+        scalars[7] = 0.0f; 
     }
 }
+
 kernel void f_upalpha_ups(
     device float* s [[buffer(0)]],
     device const float* r [[buffer(1)]],
     device const float* v [[buffer(2)]],
     device float* scalars [[buffer(3)]],
-    constant uint& size,
-    constant uint& mode,
+    constant uint& size [[buffer(4)]],
+    constant uint& mode [[buffer(5)]],
     uint gid [[thread_position_in_grid]],
     uint tid [[thread_index_in_simdgroup]],
     uint sid [[simdgroup_index_in_threadgroup]],
@@ -80,7 +97,7 @@ kernel void f_upalpha_ups(
         scalars[2] = alpha;
 
         //also zero out rho_prev
-        scalars[mode] = 0.0f;
+        scalars[mode%2] = 0.0f;
     }
 
 }
@@ -88,7 +105,7 @@ kernel void f_dip(
     device const float* s [[buffer(0)]],
     device const float* t [[buffer(1)]],
     device float* scalars [[buffer(2)]],
-    constant uint& size,
+    constant uint& size [[buffer(3)]],
     uint gid [[thread_position_in_grid]],
     uint tid [[thread_index_in_simdgroup]],
     uint sid [[simdgroup_index_in_threadgroup]],
@@ -154,8 +171,8 @@ kernel void f_dspvmv(
     device float* b [[buffer(6)]],
     device atomic_float* ret_y [[buffer(7)]],
     device atomic_float* ret_z [[buffer(8)]],
-    constant uint& num_rows,
-    constant uint& num_cols,
+    constant uint& num_rows [[buffer(9)]],
+    constant uint& num_cols [[buffer(10)]],
     uint gid [[ thread_position_in_grid ]],
     uint tid [[ thread_index_in_simdgroup ]],
     uint sid [[ simdgroup_index_in_threadgroup ]],
@@ -233,8 +250,8 @@ kernel void f_upomega_upxr_laa(
     device const float* s [[buffer(4)]],
     device const float* t [[buffer(5)]],
     device float* scalars [[buffer(6)]],
-    constant uint& size,
-    constant uint& mode,
+    constant uint& size [[buffer(7)]],
+    constant uint& mode [[buffer(8)]],
     uint gid [[thread_position_in_grid]],
     uint tid [[thread_index_in_simdgroup]],
     uint sid [[simdgroup_index_in_threadgroup]],
@@ -244,7 +261,12 @@ kernel void f_upomega_upxr_laa(
     threadgroup float alpha; 
 
     if (lid == 0) {
-        omega = scalars[5] / scalars[6];
+        float phi2 = scalars[6];
+        if (abs(phi2) < 1e-20) {
+            omega = 0.0f; 
+        } else {
+            omega = scalars[5] / phi2;
+        }
         alpha = scalars[2];
     }
 
@@ -294,7 +316,7 @@ kernel void f_upomega_upxr_laa(
         }
 
         if (thread_group_rho_sum != 0.0 && !isnan(thread_group_rho_sum)) {
-            atomic_fetch_add_explicit((device atomic_float*) &scalars[mode], thread_group_rho_sum, memory_order_relaxed);
+            atomic_fetch_add_explicit((device atomic_float*) &scalars[mode%2], thread_group_rho_sum, memory_order_relaxed);
         }
 
         if (thread_group_norm_sum != 0.0 && !isnan(thread_group_norm_sum)) {

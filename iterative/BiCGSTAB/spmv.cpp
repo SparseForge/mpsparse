@@ -54,7 +54,6 @@ class csr_tensor {
         MTL::ComputePipelineState* pso_dip;
         MTL::ComputePipelineState* pso_upalpha_ups;
         MTL::ComputePipelineState* pso_upp;
-        MTL::ComputePipelineState* pso_f_spvmv;
 
         uint num_rows;
         uint num_cols;
@@ -345,9 +344,7 @@ class csr_tensor {
 
             this->pso_upomega_upxr_laa = loadKernel("f_upomega_upxr_laa");
             this->pso_dip = loadKernel("f_dip");
-            this->pso_f_spvmv = loadKernel("f_dspvmv");
             this->pso_upalpha_ups = loadKernel("f_upalpha_ups");
-
             this->pso_upp = loadKernel("upp");
 
             library->release();
@@ -515,7 +512,6 @@ class csr_tensor {
             enc->dispatchThreads(MTL::Size::Make(1, 1, 1), MTL::Size::Make(THREADS_PER_GROUP, 1, 1));
         }
 
-
         void cgd(
             torch::Tensor b,
             torch::Tensor x
@@ -622,11 +618,8 @@ class csr_tensor {
                     if (*(float*) stage_r_norm->contents() < TOLERANCE) {
                         cmd = queue->commandBuffer();
                         enc = cmd->computeCommandEncoder();
-
-                        break;
-                        
+                        break;         
                     }
-
 
                     cmd = queue->commandBuffer();
                     enc = cmd->computeCommandEncoder();
@@ -678,6 +671,31 @@ class csr_tensor {
             );
         }
 
+        void debug(
+            MTL::Buffer* x,
+            MTL::CommandBuffer** cmd,
+            MTL::ComputeCommandEncoder** enc,
+            int size
+        ) {
+            (*enc)->endEncoding();
+            (*cmd)->commit();
+            (*cmd)->waitUntilCompleted();
+
+            MTL::CommandBuffer* debug_cmd = queue->commandBuffer();
+            MTL::BlitCommandEncoder* blit_check = (debug_cmd)->blitCommandEncoder();
+            MTL::Buffer* staged_debug = device->newBuffer(size * sizeof(float), MTL::ResourceStorageModeShared);
+            blit_check->copyFromBuffer(x, 0, staged_debug, 0, size * sizeof(float));
+            blit_check->endEncoding();
+
+            (debug_cmd)->commit();
+
+            cout << "scalar[0] debug printed: " << ((float*) staged_debug->contents())[0] << "\n";
+
+            *cmd = queue->commandBuffer();
+            *enc = (*cmd)->computeCommandEncoder();
+
+        }
+
         void bicgstab_op(
             float* x_vals,
             float* b_vals
@@ -703,7 +721,7 @@ class csr_tensor {
             //5 : phi1
             //6 : phi2
             //7 : r_norm
-            float scalar_buffers_cpu[8] = {1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+            float scalar_buffers_cpu[8] = {1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
             MTL::Buffer* scalars = device->newBuffer(8 * sizeof(float), MTL::ResourceStorageModePrivate);
             MTL::Buffer* stage_scalars = device->newBuffer(scalar_buffers_cpu, 8 * sizeof(float), MTL::ResourceStorageModeShared);
 
@@ -713,9 +731,8 @@ class csr_tensor {
             blit_init->fillBuffer(x, NS::Range::Make(0, this->num_rows * sizeof(float)), 0);
             blit_init->copyFromBuffer(stage_b, 0, r, 0, this->num_rows * sizeof(float));
             blit_init->copyFromBuffer(stage_b, 0, r0, 0, this->num_rows * sizeof(float));
-            blit_init->fillBuffer(p, NS::Range::Make(0, this->num_rows * sizeof(float)), 0);
-            blit_init->fillBuffer(v, NS::Range::Make(0, this->num_rows * sizeof(float)), 0);
             blit_init->copyFromBuffer(stage_b, 0, p, 0, this->num_rows * sizeof(float));
+            blit_init->fillBuffer(v, NS::Range::Make(0, this->num_rows * sizeof(float)), 0);
             blit_init->copyFromBuffer(stage_scalars, 0, scalars, 0, 8 * sizeof(float));
             blit_init->endEncoding();
             cmd_blit->commit();
@@ -740,7 +757,6 @@ class csr_tensor {
             MTL::CommandBuffer* cmd = queue->commandBuffer();
             MTL::ComputeCommandEncoder* enc = cmd->computeCommandEncoder();
 
-
             int iter_number = (5000 < this->num_rows) ? 5000 : this->num_rows;
             bool left_early = false;
 
@@ -755,6 +771,7 @@ class csr_tensor {
                 enc->setBuffer(v, 0, 2); 
                 enc->setBuffer(scalars, 0, 3); 
                 enc->setBytes(&this->num_rows, sizeof(uint), 4);
+                enc->setBytes(&i, sizeof(uint), 5);
                 enc->dispatchThreads(MTL::Size::Make(this->num_rows, 1, 1), MTL::Size::Make(THREADS_PER_GROUP, 1, 1));
                 enc->memoryBarrier(MTL::BarrierScopeBuffers);
 
@@ -780,8 +797,10 @@ class csr_tensor {
                 enc->setBuffer(r, 0, 1);
                 enc->setBuffer(v, 0, 2);
                 enc->setBuffer(scalars, 0, 3);
-                enc->setBytes(&this->num_rows, sizeof(uint32_t), 7);
+                enc->setBytes(&this->num_rows, sizeof(uint32_t), 4);
+                enc->setBytes(&i, sizeof(uint), 5);
                 enc->dispatchThreads(MTL::Size::Make(this->num_rows, 1, 1), MTL::Size::Make(THREADS_PER_GROUP, 1, 1));
+                enc->dispatchThreads(MTL::Size::Make(5000, 1, 1), MTL::Size::Make(THREADS_PER_GROUP, 1, 1));
                 enc->memoryBarrier(MTL::BarrierScopeBuffers);
 
                 //mv: t = A * s
@@ -809,8 +828,10 @@ class csr_tensor {
                 enc->setBuffer(t, 0, 5);
                 enc->setBuffer(scalars, 0, 6); 
                 enc->setBytes(&this->num_rows, sizeof(uint), 7);
+                enc->setBytes(&i, sizeof(uint), 8);
                 enc->dispatchThreads(MTL::Size::Make(this->num_rows, 1, 1), MTL::Size::Make(THREADS_PER_GROUP, 1, 1));
                 enc->memoryBarrier(MTL::BarrierScopeBuffers);
+
 
                 if (i % CHECK_ITERATION_NUMBER == 0) {
                     if (i > 0) {
@@ -838,7 +859,6 @@ class csr_tensor {
                 cmd->waitUntilCompleted();
             }
 
-
             r->release();
             r0->release();
             p->release();
@@ -861,6 +881,7 @@ class csr_tensor {
 
             memcpy(x_vals, stage_x->contents(), (this->num_cols) * sizeof(float));
 
+            //cout << "i hate this " << endl;
 
             stage_x->release();
 

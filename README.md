@@ -3,8 +3,8 @@
 An implementation of sparse matrix operations using Apple's Metal Performance Shaders. The goal is to build a library which can support QR and LU factorization of sparse matrices 
 
 ## Currently Implemented
-* CGD
-* BiCGSTAB
+* CGD (CSR and BCSR)
+* BiCGSTAB (CSR and BCSR)
 * COO to CSR converter
 
 ## TODO
@@ -13,7 +13,7 @@ An implementation of sparse matrix operations using Apple's Metal Performance Sh
 * Implement sparse QR in CUDA (reference)
 * Discuss iterative solvers more
 * Plug in COO to CSR to torch
-* Add BCSR support
+* Improve BCSR support
 
 # CGD
 
@@ -179,8 +179,101 @@ We benchmarked the solver against standard CPU implementations using two distinc
 
 ![Results](graphs/benchmark_time.png)
 
+# BCSR Support
+
+## Usage
+
+BCSR support is still in its early stages; currently, the repository has CGD and BiCGSTAB solvers that have been altered to accept the BCSR format. However, one must manually pad the matrix and convert it into BCSR form. In addition, one must make sure that the input and output vectors have been padded. 
+```python
+def coo_to_metal_bcsr(indices, values, num_rows, num_cols, block_size=4):
+    """
+    Converts PyTorch COO tensors into Block CSR format using Scipy.
+    Handles padding logic automatically.
+    """
+    # 1. Convert to Scipy BSR
+    # This handles the complex logic of densifying blocks and padding
+    coo = scipy.sparse.coo_matrix(
+        (values.numpy(), (indices[0].numpy(), indices[1].numpy())), 
+        shape=(num_rows, num_cols)
+    )
+    
+    # Scipy does the heavy lifting here
+    bsr = coo.tobsr(blocksize=(block_size, block_size))
+    
+    # 2. Extract Flattened Arrays 
+    flat_vals = torch.from_numpy(bsr.data.flatten()).float()
+    
+    # bsr.indptr -> Block Row Pointers
+    row_ptr = torch.from_numpy(bsr.indptr).int()
+    
+    # bsr.indices -> Block Column Indices
+    col_ind = torch.from_numpy(bsr.indices).int()
+    
+    # 3. Calculate Padded Dimensions
+    padded_rows = bsr.shape[0]
+    padded_cols = bsr.shape[1]
+    
+    return flat_vals, row_ptr, col_ind, padded_rows, padded_cols
+
+class MetalBCSRSolver:
+    def __init__(self, indices, values, rows, cols, block_size=4):
+        self.rows = rows
+        self.cols = cols
+        
+        # 1. Convert to BCSR
+        b_vals, b_rptr, b_cind, p_rows, p_cols = coo_to_metal_bcsr(
+            indices, values, rows, cols, block_size
+        )
+        
+        self.padded_rows = p_rows
+        self.padded_cols = p_cols
+        
+        # 2. Initialize C++ Extension
+        dummy = torch.empty(0)
+        self.cpp_solver = bcsr.bcsr_tensor(
+            dummy,      # keys (unused)
+            b_vals,     # dense blocks
+            b_rptr,     # row_ptr
+            b_cind,     # col_ind
+            rows,       # Logical rows
+            cols,       # Logical cols
+            block_size
+        )
+
+    def solve(self, b_vector):
+        """
+        Solves Ax = b, handling input/output padding safety.
+        """
+
+        # We must pad: if logical size is 10 but padded is 12, we must pass 12 to GPU.
+        if b_vector.size(0) < self.padded_rows:
+            b_padded = torch.zeros(self.padded_rows, dtype=torch.float32)
+            b_padded[:self.rows] = b_vector
+        else:
+            b_padded = b_vector
+
+        x_out = torch.zeros(self.cols, dtype=torch.float32)
+
+        # Run the BiCGSTAB solver
+        self.cpp_solver.bicgstab(b_padded, x_out)
+        
+        return x_out
+
+```
+
+## Benchmarks
+
+We benchmarked the solver against standard CPU implementations using two distinct matrix topologies:
+
+1. ML Block-Sparse: Structured sparsity common in pruned machine learning models.
+
+2. Physics Stencil: 5-point Laplacian stencil common in finite difference simulations.
+
+![Timing Results](graphs/bcsr_solver_times.png)
+![Speedup Results](graphs/bcsr_speedup_plot.png)
+
 # Future Steps 
 
-Our COO to CSR conversion occurs on the GPU but takes longer than anticipated, so a major goal is to optimize those kernels. For CGD and BiCGSTAB, our goal is to implement Blocked CSR (BCSR); we believe that this will give great performance boosts. We also hope to implement adaptive kernels; this will likely take longer and may not happen for a while. Our end goal is to have a direct solver.
+Our COO to CSR conversion occurs on the GPU but takes longer than anticipated, so a major goal is to optimize those kernels. Additionally, the COO to BCSR conversion is currently done manually, so we will also implement that. We also hope to implement adaptive kernels; this will likely take longer and may not happen for a while. Our end goal remains building a direct solver.
 
 
